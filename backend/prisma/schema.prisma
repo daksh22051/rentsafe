@@ -1,7 +1,6 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// This is your Prisma schema file for RentSafe,
+// a full-stack student rental platform with trust scores,
+// verification workflows, and roommate matching.
 
 generator client {
   provider = "prisma-client-js"
@@ -11,4 +10,422 @@ datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum Role {
+  STUDENT
+  OWNER
+  ADMIN
+}
+
+enum PropertyType {
+  APARTMENT
+  HOSTEL
+  PG
+  FLAT
+  STUDIO
+  HOUSE
+}
+
+enum FurnishedStatus {
+  FULLY_FURNISHED
+  SEMI_FURNISHED
+  UNFURNISHED
+}
+
+enum FoodAvailability {
+  INCLUDED
+  AVAILABLE_OPTIONAL
+  NOT_AVAILABLE
+  SELF_COOKING_ALLOWED
+}
+
+enum PropertyVerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum VerificationStatus {
+  PENDING
+  ADMIN_REVIEW
+  APPROVED
+  REJECTED
+  VERIFIED
+}
+
+enum RoomType {
+  SINGLE
+  DOUBLE_SHARING
+  TRIPLE_SHARING
+  FOUR_SHARING
+  HALL_OR_SHARED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+enum ComplaintStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum ComplaintType {
+  NOISE_DISTURBANCE
+  MAINTENANCE_ISSUE
+  SECURITY_CONCERN
+  FALSE_LISTING
+  OVERCHARGING
+  UNHYGIENIC_CONDITIONS
+  OTHER
+}
+
+enum NotificationType {
+  BOOKING_UPDATE
+  VERIFICATION_UPDATE
+  COMPLAINT_UPDATE
+  REVIEW_RECEIVED
+  ROOMMATE_MATCH
+  SYSTEM_ALERT
+}
+
+// ==========================================
+// CORE MODELS
+// ==========================================
+
+/// 1. User: Central identity linked to Supabase Auth UUID
+model User {
+  id              String   @id @default(uuid())
+  supabaseAuthId  String?  @unique
+  email           String   @unique
+  name            String?
+  avatarUrl       String?
+  phone           String?
+  role            Role     @default(STUDENT)
+  isEmailVerified Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  ownerProfile          OwnerProfile?
+  properties            Property[]
+  bookings              Booking[]
+  reviews               Review[]
+  complaints            Complaint[]         @relation("UserComplaints")
+  handledComplaints     Complaint[]         @relation("AdminHandledComplaints")
+  reviewedVerifications Verification[]      @relation("AdminReviewedVerifications")
+  favorites             Favorite[]
+  roommatePreference    RoommatePreference?
+  notifications         Notification[]
+
+  @@index([role])
+  @@index([email])
+}
+
+/// 2. OwnerProfile: Detailed verification and KYC info for property owners
+model OwnerProfile {
+  id                      String   @id @default(uuid())
+  userId                  String   @unique
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  govIdType               String?
+  govIdNumber             String?
+  govIdDocumentUrl        String?
+  propertyOwnershipDocUrl String?
+  businessName            String?
+  isVerified              Boolean  @default(false)
+  verificationNotes       String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  // Relations
+  verifications Verification[]
+
+  @@index([isVerified])
+}
+
+/// 3. Property: Rental listings with location, pricing, trust score, and rules
+model Property {
+  id                 String                     @id @default(uuid())
+  ownerId            String
+  owner              User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  title              String
+  description        String                     @db.Text
+  propertyType       PropertyType
+  address            String
+  city               String
+  state              String
+  pincode            String
+  landmark           String?
+  latitude           Float
+  longitude          Float
+  rent               Decimal                    @db.Decimal(10, 2)
+  securityDeposit    Decimal                    @db.Decimal(10, 2)
+  isAvailable        Boolean                    @default(true)
+  availableFrom      DateTime?
+  foodInfo           FoodAvailability           @default(NOT_AVAILABLE)
+  foodDescription    String?
+  hasWifi            Boolean                    @default(false)
+  wifiSpeedMbps      Int?
+  furnishedStatus    FurnishedStatus            @default(SEMI_FURNISHED)
+  rules              String?                    @db.Text
+  verificationStatus PropertyVerificationStatus @default(UNVERIFIED)
+  trustScore         Float                      @default(0.0)
+  totalRooms         Int                        @default(1)
+  totalBeds          Int?
+  noticePeriodDays   Int?                       @default(30)
+  lockInPeriodMonths Int?                       @default(0)
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  // Relations
+  rooms         Room[]
+  amenities     PropertyAmenity[]
+  images        PropertyImage[]
+  verifications Verification[]
+  bookings      Booking[]
+  reviews       Review[]
+  complaints    Complaint[]
+  favorites     Favorite[]
+
+  // Indexes for high-performance search & filtering
+  @@index([city, isAvailable])
+  @@index([propertyType, isAvailable])
+  @@index([rent, isAvailable])
+  @@index([verificationStatus])
+  @@index([trustScore])
+  @@index([latitude, longitude])
+  @@index([hasWifi, furnishedStatus, foodInfo])
+}
+
+/// 4. Room: Room types, rents, and availability within a property
+model Room {
+  id                  String   @id @default(uuid())
+  propertyId          String
+  property            Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  roomNumber          String?
+  roomType            RoomType
+  rent                Decimal  @db.Decimal(10, 2)
+  securityDeposit     Decimal? @db.Decimal(10, 2)
+  capacity            Int      @default(1)
+  currentOccupancy    Int      @default(0)
+  isAvailable         Boolean  @default(true)
+  hasAttachedBathroom Boolean  @default(false)
+  hasBalcony          Boolean  @default(false)
+  hasAc               Boolean  @default(false)
+  description         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations
+  bookings Booking[]
+
+  @@index([propertyId])
+  @@index([roomType, isAvailable])
+  @@index([rent])
+}
+
+/// 5. Amenity: Reusable amenity catalog (e.g. AC, WiFi, Power Backup, CCTV)
+model Amenity {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  category  String?
+  icon      String?
+  createdAt DateTime @default(now())
+
+  // Relations
+  properties PropertyAmenity[]
+
+  @@index([category])
+}
+
+/// 6. PropertyAmenity: Many-to-many junction between Property and Amenity
+model PropertyAmenity {
+  id         String   @id @default(uuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  amenityId  String
+  amenity    Amenity  @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([propertyId, amenityId])
+  @@index([propertyId])
+  @@index([amenityId])
+}
+
+/// 7. PropertyImage: Photo gallery with display ordering and cover photo indicator
+model PropertyImage {
+  id           String   @id @default(uuid())
+  propertyId   String
+  property     Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  url          String
+  caption      String?
+  displayOrder Int      @default(0)
+  isCover      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([propertyId, displayOrder])
+}
+
+/// 8. Verification: Document submission, admin review, and verification audit trail
+model Verification {
+  id              String             @id @default(uuid())
+  propertyId      String
+  property        Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  ownerProfileId  String?
+  ownerProfile    OwnerProfile?      @relation(fields: [ownerProfileId], references: [id], onDelete: SetNull)
+  status          VerificationStatus @default(PENDING)
+  documentType    String
+  documentUrl     String?
+  submittedNotes  String?            @db.Text
+  reviewedById    String?
+  reviewedBy      User?              @relation("AdminReviewedVerifications", fields: [reviewedById], references: [id], onDelete: SetNull)
+  rejectionReason String?            @db.Text
+  verifiedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([propertyId])
+  @@index([status])
+  @@index([reviewedById])
+}
+
+/// 9. Booking: Student rental requests and reservation management
+model Booking {
+  id              String        @id @default(uuid())
+  studentId       String
+  student         User          @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  propertyId      String
+  property        Property      @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomId          String?
+  room            Room?         @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  status          BookingStatus @default(PENDING)
+  moveInDate      DateTime
+  moveOutDate     DateTime?
+  rentAmount      Decimal       @db.Decimal(10, 2)
+  depositAmount   Decimal       @db.Decimal(10, 2)
+  totalAmount     Decimal       @db.Decimal(10, 2)
+  specialRequests String?       @db.Text
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([studentId])
+  @@index([propertyId])
+  @@index([roomId])
+  @@index([status])
+}
+
+/// 10. Review: Verified student ratings across cleanliness, location, value, and owner
+model Review {
+  id                String   @id @default(uuid())
+  propertyId        String
+  property          Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  reviewerId        String
+  reviewer          User     @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
+  cleanlinessRating Int
+  locationRating    Int
+  valueRating       Int
+  ownerRating       Int?
+  overallRating     Float
+  comment           String   @db.Text
+  isVerifiedStay    Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([propertyId, reviewerId])
+  @@index([propertyId])
+  @@index([reviewerId])
+  @@index([overallRating])
+}
+
+/// 11. Complaint: Issue reporting, evidence storage, and resolution lifecycle
+model Complaint {
+  id            String          @id @default(uuid())
+  userId        String
+  user          User            @relation("UserComplaints", fields: [userId], references: [id], onDelete: Cascade)
+  propertyId    String
+  property      Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  complaintType ComplaintType
+  description   String          @db.Text
+  evidenceUrls  String[]
+  status        ComplaintStatus @default(SUBMITTED)
+  adminNotes    String?         @db.Text
+  handledById   String?
+  handledBy     User?           @relation("AdminHandledComplaints", fields: [handledById], references: [id], onDelete: SetNull)
+  resolvedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([propertyId])
+  @@index([userId])
+  @@index([status])
+  @@index([complaintType])
+}
+
+/// 12. Favorite: Bookmarked/saved properties by students
+model Favorite {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, propertyId])
+  @@index([userId])
+  @@index([propertyId])
+}
+
+/// 13. RoommatePreference: Student profile for intelligent roommate matching
+model RoommatePreference {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  minBudget          Decimal? @db.Decimal(10, 2)
+  maxBudget          Decimal? @db.Decimal(10, 2)
+  preferredCity      String?
+  preferredLocations String[]
+  sleepSchedule      String?
+  foodPreference     String?
+  studyHabits        String?
+  lifestyle          String?
+  smokingAllowed     Boolean  @default(false)
+  drinkingAllowed    Boolean  @default(false)
+  petsAllowed        Boolean  @default(false)
+  genderPreference   String?
+  bio                String?  @db.Text
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([preferredCity])
+  @@index([isActive])
+}
+
+/// 14. Notification: Real-time and in-app system alerts
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String           @db.Text
+  link      String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
 }
